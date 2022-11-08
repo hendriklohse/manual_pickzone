@@ -181,15 +181,11 @@ class ManualPickZone:
         with self.__configuration.lanes.request() as lane_request:
                 yield lane_request
                 self.__logger.log(
-                    action="batch-pick-start",
+                    action="addition-to-lane",
                     order_tote_id="batch-" + str(self.batch_id),
                     timestamp=self.__configuration.env.now,
                     location_id="buffer"
                 )
-
-
-
-
 
 
         if len(self.__accepting_batches) > 0:
