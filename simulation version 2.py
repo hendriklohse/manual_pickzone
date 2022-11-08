@@ -9,8 +9,9 @@ from tqdm import tqdm
 import simpy
 import yaml
 from scipy.stats import truncnorm
+import pandas as pd
 
-totes_distribution = pd.read_csv("C:/Users/20182954/OneDrive - TU Eindhoven/Master/Modelling week/sku_qty_distribution.csv", sep = ";")
+totes_distribution = pd.read_csv("sku_qty_distribution.csv", sep = ";")
 totes_cdf = totes_distribution["cumulative_fraction"]
 totes_pdf = totes_distribution["fraction"]
 
@@ -27,7 +28,7 @@ class EventLogger:
     def __init__(self, log_file_name: str):
         self.start_of_day = None
 
-        with open("C:/Users/20182954/OneDrive - TU Eindhoven/Master/Modelling week/logging.conf") as logging_config_file:
+        with open("logging.conf") as logging_config_file:
             logging_config = yaml.load(logging_config_file, Loader=yaml.FullLoader)
         logging_config["handlers"]["file"]["filename"] = log_file_name
         logging.config.dictConfig(logging_config)
@@ -165,7 +166,7 @@ class ManualPickZone:
         self.__configuration = Configuration(
             env=env,
             pickers=simpy.Resource(env=env, capacity=self.__nr_of_carts),
-            lanes = simpy.Resource(env=env, capacity=self.__nr_of_lanes)
+            lanes = simpy.Resource(env=env, capacity=self.__nr_of_lanes),
             consolidation_stations=simpy.Resource(env=env, capacity=self.__nr_of_consolidation_stations),
             activating_batches=simpy.Store(env=env),
             orderline_pick_performance=PickPerformance(mean=18000, st_dev=3000, min_time=6000, max_time=30000),
