@@ -12,7 +12,7 @@ from scipy.stats import truncnorm
 import pandas as pd
 import numpy as np
 
-max_lanes = 20
+max_lanes = 2
 global nr_busy_lanes
 nr_busy_lanes = 0
 reroute_constant = 1000*60
@@ -198,39 +198,42 @@ class ManualPickZone:
         else:
             # Create new batch if there is still a lane available
             global nr_busy_lanes
-            global max_lanes
-            if nr_busy_lanes < max_lanes:
-                nr_busy_lanes += 1
-                # Create a new batch
-                batch = Batch(
-                    batch_id=self.__next_batch_id,
-                    zone_configuration=self.__configuration,
-                    max_batch_size=self.max_batch_size,
-                    max_waiting_time=self.__max_waiting_time,
-                    logger=self.__logger
-                )
+            nr_busy_lanes += 1
+            # Create a new batch
+            batch = Batch(
+                batch_id=self.__next_batch_id,
+                zone_configuration=self.__configuration,
+                max_batch_size=self.max_batch_size,
+                max_waiting_time=self.__max_waiting_time,
+                logger=self.__logger
+            )
 
-                self.__logger.log(
-                    action="new-batch",
-                    order_tote_id="batch-" + str(batch.batch_id),
-                    timestamp=self.__configuration.env.now,
-                    location_id="buffer"
-                )
-                batch.add_tote(tote_id=tote_id, nr_skus=nr_skus, tote_finish_event=tote_finish_event)
-                self.__accepting_batches[self.__next_batch_id] = batch
-                self.__configuration.env.process(batch.process())
-                self.__next_batch_id += 1
-                return tote_finish_event
+            self.__logger.log(
+                action="new-batch",
+                order_tote_id="batch-" + str(batch.batch_id),
+                timestamp=self.__configuration.env.now,
+                location_id="buffer"
+            )
+            batch.add_tote(tote_id=tote_id, nr_skus=nr_skus, tote_finish_event=tote_finish_event)
+            self.__accepting_batches[self.__next_batch_id] = batch
+            self.__configuration.env.process(batch.process())
+            self.__next_batch_id += 1
+            return tote_finish_event
 
-            else: # Reroute the tote   
-                current_tote = totes_dict[self.__tote_id]
-                current_tote.__arrival_time += reroute_constant
-                current_tote.process()
+            # else: # Reroute the tote   
+            #     self.__logger.log(
+            #         action="rerouting tote",
+            #         order_tote_id="tote-" + str(tote_id),
+            #         timestamp=self.__configuration.env.now,
+            #         location_id="outside"
+            #     )
+            #     current_tote = totes_dict[tote_id]
+            #     current_tote.reroute(reroute_constant)
+            #     current_tote.process()
+            #     return tote_finish_event
 
 
 
-            
-        
     
     def process_activating_batches(self):
         """Register a batch as active (released for picking) instead of accepting.
@@ -356,7 +359,7 @@ class Batch:
             
 
             self.__logger.log(
-                action="batch-pick-end",
+                action="batch-pick-end, lane becomes free",
                 order_tote_id="batch-" + str(self.batch_id),
                 timestamp=self.__configuration.env.now,
                 location_id="buffer"
@@ -417,26 +420,50 @@ class Tote:
         self.__original_arrival = arrival_time
 
 
-    def process(self):
+    def process(self, first = True):
+        print('we have process event for tote id , first = ', self.__tote_id, first)
 
         totes_dict[self.__tote_id] = self
 
         # Wait until this tote arrives
-        yield self.__env.timeout(self.__arrival_time)
+        if first:
+            yield self.__env.timeout(self.__arrival_time)
 
         # Wait until the manual pick zone has finished handling this tote
-        yield self.__manual_pick_zone.handle_tote(tote_id=self.__tote_id, nr_skus=self.__nr_skus)
+        global nr_busy_lanes
+        global max_lanes
+
+        if nr_busy_lanes < max_lanes:
+            yield self.__manual_pick_zone.handle_tote(tote_id=self.__tote_id, nr_skus=self.__nr_skus)
+            self.__logger.log(
+                action="tote-finished",
+                order_tote_id=self.__tote_id,
+                timestamp=self.__env.now,
+                location_id="consolidation"
+            )
+        else:
+            self.__logger.log(
+                action="start-reroute",
+                order_tote_id=self.__tote_id,
+                timestamp=self.__env.now,
+                location_id="outside"
+            )
+            yield self.__env.timeout(self.__arrival_time + reroute_constant)
+            self.__logger.log(
+                action="end-reroute",
+                order_tote_id=self.__tote_id,
+                timestamp=self.__env.now,
+                location_id="outside"
+            )
+            self.process(False)
 
         # Log finishing the tote, as this tote may be finished earlier than another tote in the same batch.
-        self.__logger.log(
-            action="tote-finished",
-            order_tote_id=self.__tote_id,
-            timestamp=self.__env.now,
-            location_id="consolidation"
-        )
 
-        sojourn_times[int(self.__tote_id) - 1]= self.__env.now - self.__arrival_time
+        sojourn_times[int(self.__tote_id) - 1]= self.__env.now - self.__original_arrival
         self.__progress_bar.update(1)
+    
+    def reroute(self, t):
+        self.__arrival_time = t
 
 
 # ==================================================== Start simulation here ===========================================================================
@@ -461,7 +488,7 @@ if __name__ == "__main__":
 
     # TODO generate totes here, now done with random start times and only 1 sku.
 
-    nr_totes = 1000
+    nr_totes = 10000
     sojourn_times = np.ones(nr_totes)
     progress_bar = tqdm(total=nr_totes)
     for i in range(0, nr_totes):
@@ -481,7 +508,7 @@ if __name__ == "__main__":
     progress_bar.close()
 
 
-import matplotlib.pyplot as plt
-plt.hist(sojourn_times/60000)
-plt.xlabel('Sojourn times')
-plt.show()
+# import matplotlib.pyplot as plt
+# plt.hist(sojourn_times/60000)
+# plt.xlabel('Sojourn times')
+# plt.show()
