@@ -12,6 +12,13 @@ from scipy.stats import truncnorm
 import pandas as pd
 import numpy as np
 
+max_lanes = 20
+global nr_busy_lanes
+nr_busy_lanes = 0
+reroute_constant = 1000*60
+
+totes_dict = dict()
+
 totes_distribution = pd.read_csv("sku_qty_distribution.csv", sep = ";")
 totes_cdf = totes_distribution["cumulative_fraction"]
 totes_pdf = totes_distribution["fraction"]
@@ -62,6 +69,7 @@ class EventLogger:
             "timestamp": str(iso_timestamp),
             "location_id": location_id
         }
+        
         self.__logger.info(msg="Log entry", extra=log_info)
 
 
@@ -115,7 +123,7 @@ class Configuration:
 
     env: simpy.Environment
     pickers: simpy.Resource
-    lanes: simpy.Resource
+    # lanes: simpy.Resource
     consolidation_stations: simpy.Resource
     activating_batches: simpy.Store
     orderline_pick_performance: PickPerformance
@@ -136,8 +144,8 @@ class ManualPickZone:
     
     def __init__(
             self,
-            nr_of_lanes : int,
             nr_of_pickers: int,
+            # nr_of_lanes : int,
             max_batch_size: int,
             nr_of_consolidation_stations: int,
             max_waiting_time: int,
@@ -155,7 +163,7 @@ class ManualPickZone:
             env: The simpy simulation environment.
             logger: The event logger.
         """
-        self.__nr_of_lanes = nr_of_lanes # Number of lanes / buffers
+        # self.__nr_of_lanes = nr_of_lanes # Max amount of lanes / buffers
         self.__nr_of_carts = nr_of_pickers  # Max number of active pickers.
         self.max_batch_size = max_batch_size  # Max number of totes on a cart.
         self.__nr_of_consolidation_stations = nr_of_consolidation_stations  # Number of consolidation stations
@@ -167,7 +175,7 @@ class ManualPickZone:
         self.__configuration = Configuration(
             env=env,
             pickers=simpy.Resource(env=env, capacity=self.__nr_of_carts),
-            lanes = simpy.Resource(env=env, capacity=self.__nr_of_lanes),
+            # lanes = simpy.Resource(env=env, capacity = self.__nr_of_lanes),
             consolidation_stations=simpy.Resource(env=env, capacity=self.__nr_of_consolidation_stations),
             activating_batches=simpy.Store(env=env),
             orderline_pick_performance=PickPerformance(mean=18000, st_dev=3000, min_time=6000, max_time=30000),
@@ -178,16 +186,6 @@ class ManualPickZone:
     def handle_tote(self, tote_id: str, nr_skus: int) -> simpy.Event:
         tote_finish_event = self.__configuration.env.event()
 
-        with self.__configuration.lanes.request() as lane_request:
-                yield lane_request
-                self.__logger.log(
-                    action="addition-to-lane",
-                    order_tote_id="batch-" + str(self.batch_id),
-                    timestamp=self.__configuration.env.now,
-                    location_id="buffer"
-                )
-
-
         if len(self.__accepting_batches) > 0:
             # There are batches accepting totes.
             oldest_batch_id = list(self.__accepting_batches.keys())[0]
@@ -196,41 +194,43 @@ class ManualPickZone:
                 oldest_batch.add_tote(tote_id=tote_id, nr_skus=nr_skus, tote_finish_event=tote_finish_event)
             else:
                 raise Exception("Cannot add tote " + tote_id + " to accepting batch " + str(oldest_batch.batch_id) + ".")
+            return tote_finish_event
         else:
-            # wait for a free lane, then create new batch
+            # Create new batch if there is still a lane available
+            global nr_busy_lanes
+            global max_lanes
+            if nr_busy_lanes < max_lanes:
+                nr_busy_lanes += 1
+                # Create a new batch
+                batch = Batch(
+                    batch_id=self.__next_batch_id,
+                    zone_configuration=self.__configuration,
+                    max_batch_size=self.max_batch_size,
+                    max_waiting_time=self.__max_waiting_time,
+                    logger=self.__logger
+                )
 
-            with self.__configuration.lanes.request() as lane_request:
-                yield lane_request
                 self.__logger.log(
-                    action="batch-pick-start",
-                    order_tote_id="batch-" + str(self.batch_id),
+                    action="new-batch",
+                    order_tote_id="batch-" + str(batch.batch_id),
                     timestamp=self.__configuration.env.now,
                     location_id="buffer"
                 )
+                batch.add_tote(tote_id=tote_id, nr_skus=nr_skus, tote_finish_event=tote_finish_event)
+                self.__accepting_batches[self.__next_batch_id] = batch
+                self.__configuration.env.process(batch.process())
+                self.__next_batch_id += 1
+                return tote_finish_event
+
+            else: # Reroute the tote   
+                current_tote = totes_dict[self.__tote_id]
+                current_tote.__arrival_time += reroute_constant
+                current_tote.process()
 
 
 
-
-
-            # Create a new batch
-            batch = Batch(
-                batch_id=self.__next_batch_id,
-                zone_configuration=self.__configuration,
-                max_batch_size=self.max_batch_size,
-                max_waiting_time=self.__max_waiting_time,
-                logger=self.__logger
-            )
-            self.__logger.log(
-                action="new-batch",
-                order_tote_id="batch-" + str(batch.batch_id),
-                timestamp=self.__configuration.env.now,
-                location_id="buffer"
-            )
-            batch.add_tote(tote_id=tote_id, nr_skus=nr_skus, tote_finish_event=tote_finish_event)
-            self.__accepting_batches[self.__next_batch_id] = batch
-            self.__configuration.env.process(batch.process())
-            self.__next_batch_id += 1
-        return tote_finish_event
+            
+        
     
     def process_activating_batches(self):
         """Register a batch as active (released for picking) instead of accepting.
@@ -351,6 +351,9 @@ class Batch:
 
             # Pick the items.
             yield self.__configuration.env.timeout(total_pick_time)
+            global nr_busy_lanes
+            nr_busy_lanes -= 1 # A lane becomes free 
+            
 
             self.__logger.log(
                 action="batch-pick-end",
@@ -411,9 +414,12 @@ class Tote:
         self.__progress_bar = progress_bar
         self.__env = env
         self.__logger = logger
-        
+        self.__original_arrival = arrival_time
+
 
     def process(self):
+
+        totes_dict[self.__tote_id] = self
 
         # Wait until this tote arrives
         yield self.__env.timeout(self.__arrival_time)
@@ -435,8 +441,8 @@ class Tote:
 
 # ==================================================== Start simulation here ===========================================================================
 
-
 if __name__ == "__main__":
+
 
     random.seed(7858363)  # Use random seed for reproducable results.
 
