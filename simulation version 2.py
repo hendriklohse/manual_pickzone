@@ -16,7 +16,6 @@ totes_pdf = totes_distribution["fraction"]
 
 def sample_skus():
     "uses the given cumulative distribution for the sku's to sample the nr of skus for one tote"
-    "hallo 123"
 
     return random.choices(totes_distribution["sku_quantity"], weights = totes_pdf)[0]
 
