@@ -19,6 +19,9 @@ totes_pdf = totes_distribution["fraction"]
 def useless_function(n):
     print(2*n)
 
+def useless_2(x):
+    print('bij jou ook?')
+
 def sample_skus():
     "uses the given cumulative distribution for the sku's to sample the nr of skus for one tote"
 
