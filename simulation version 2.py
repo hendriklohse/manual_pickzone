@@ -16,6 +16,9 @@ totes_distribution = pd.read_csv("sku_qty_distribution.csv", sep = ";")
 totes_cdf = totes_distribution["cumulative_fraction"]
 totes_pdf = totes_distribution["fraction"]
 
+def useless_function(n):
+    print(2*n)
+
 def sample_skus():
     "uses the given cumulative distribution for the sku's to sample the nr of skus for one tote"
 
