@@ -10,6 +10,7 @@ import simpy
 import yaml
 from scipy.stats import truncnorm
 import pandas as pd
+import numpy as np
 
 totes_distribution = pd.read_csv("sku_qty_distribution.csv", sep = ";")
 totes_cdf = totes_distribution["cumulative_fraction"]
