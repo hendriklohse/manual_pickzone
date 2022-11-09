@@ -11,15 +11,9 @@ import yaml
 from scipy.stats import truncnorm
 import pandas as pd
 
-totes_distribution = pd.read_csv("sku_qty_distribution.csv", sep = ";")
-totes_cdf = totes_distribution["cumulative_fraction"]
-totes_pdf = totes_distribution["fraction"]
-
-def sample_skus():
-    "uses the given cumulative distribution for the sku's to sample the nr of skus for one tote"
-
-    return random.choices(totes_distribution["sku_quantity"], weights = totes_pdf)[0]
-
+totes = pd.read_csv("sku_qty_distribution.csv", sep = ";")
+totes_cdf = totes["cumulative_fraction"]
+totes_pdf = totes["fraction"]
 
 class EventLogger:
     """Logs events
@@ -114,7 +108,6 @@ class Configuration:
 
     env: simpy.Environment
     pickers: simpy.Resource
-    lanes: simpy.Resource
     consolidation_stations: simpy.Resource
     activating_batches: simpy.Store
     orderline_pick_performance: PickPerformance
@@ -135,7 +128,6 @@ class ManualPickZone:
     
     def __init__(
             self,
-            nr_of_lanes : int,
             nr_of_pickers: int,
             max_batch_size: int,
             nr_of_consolidation_stations: int,
@@ -154,7 +146,7 @@ class ManualPickZone:
             env: The simpy simulation environment.
             logger: The event logger.
         """
-        self.__nr_of_lanes = nr_of_lanes # Number of lanes / buffers
+
         self.__nr_of_carts = nr_of_pickers  # Max number of active pickers.
         self.max_batch_size = max_batch_size  # Max number of totes on a cart.
         self.__nr_of_consolidation_stations = nr_of_consolidation_stations  # Number of consolidation stations
@@ -166,7 +158,6 @@ class ManualPickZone:
         self.__configuration = Configuration(
             env=env,
             pickers=simpy.Resource(env=env, capacity=self.__nr_of_carts),
-            lanes = simpy.Resource(env=env, capacity=self.__nr_of_lanes),
             consolidation_stations=simpy.Resource(env=env, capacity=self.__nr_of_consolidation_stations),
             activating_batches=simpy.Store(env=env),
             orderline_pick_performance=PickPerformance(mean=18000, st_dev=3000, min_time=6000, max_time=30000),
@@ -176,21 +167,6 @@ class ManualPickZone:
         
     def handle_tote(self, tote_id: str, nr_skus: int) -> simpy.Event:
         tote_finish_event = self.__configuration.env.event()
-
-        with self.__configuration.lanes.request() as lane_request:
-                yield lane_request
-                self.__logger.log(
-                    action="batch-pick-start",
-                    order_tote_id="batch-" + str(self.batch_id),
-                    timestamp=self.__configuration.env.now,
-                    location_id="buffer"
-                )
-
-
-
-
-
-
         if len(self.__accepting_batches) > 0:
             # There are batches accepting totes.
             oldest_batch_id = list(self.__accepting_batches.keys())[0]
@@ -200,21 +176,6 @@ class ManualPickZone:
             else:
                 raise Exception("Cannot add tote " + tote_id + " to accepting batch " + str(oldest_batch.batch_id) + ".")
         else:
-            # wait for a free lane, then create new batch
-
-            with self.__configuration.lanes.request() as lane_request:
-                yield lane_request
-                self.__logger.log(
-                    action="batch-pick-start",
-                    order_tote_id="batch-" + str(self.batch_id),
-                    timestamp=self.__configuration.env.now,
-                    location_id="buffer"
-                )
-
-
-
-
-
             # Create a new batch
             batch = Batch(
                 batch_id=self.__next_batch_id,
@@ -264,7 +225,6 @@ class Batch:
         self.__batch_full_event = self.__configuration.env.event()
         self.__released = False
         self.__logger = logger
-        
 
     def accepts_new_tote(self) -> bool:
         """Determine if this batch accepts new totes.
@@ -404,7 +364,6 @@ class Tote:
             progress_bar: The progress bar showing the number of finished totes.
             env: The simpy environment.
             logger: The event logger.
-            
         """
 
         self.__tote_id = tote_id
@@ -414,7 +373,6 @@ class Tote:
         self.__progress_bar = progress_bar
         self.__env = env
         self.__logger = logger
-        
 
     def process(self):
 
@@ -431,9 +389,12 @@ class Tote:
             timestamp=self.__env.now,
             location_id="consolidation"
         )
-
-        sojourn_times[int(self.__tote_id) - 1]= self.__env.now - self.__arrival_time
         self.__progress_bar.update(1)
+
+def sample_skus():
+    "uses the given cumulative distribution for the sku's to sample the nr of skus for one tote"
+
+    return random.choices(totes["sku_quantity"], weights = totes_pdf)[0]
 
 
 # ==================================================== Start simulation here ===========================================================================
@@ -457,14 +418,12 @@ if __name__ == "__main__":
     )
 
     # TODO generate totes here, now done with random start times and only 1 sku.
-
     nr_totes = 1000
-    sojourn_times = np.ones(nr_totes)
     progress_bar = tqdm(total=nr_totes)
     for i in range(0, nr_totes):
         tote = Tote(
-            tote_id= str(i),
-            nr_skus= sample_skus(),
+            tote_id="tote-" + str(i),
+            nr_skus=sample_skus(),
             arrival_time=random.randint(0, 28800000),  # random nr of milisec with at most 8 hours
             manual_pick_zone=manual_pick_zone,
             env=env,
@@ -476,9 +435,3 @@ if __name__ == "__main__":
     # Run the simulation
     env.run()
     progress_bar.close()
-
-
-import matplotlib.pyplot as plt
-plt.hist(sojourn_times/60000)
-plt.xlabel('Sojourn times')
-plt.show()
