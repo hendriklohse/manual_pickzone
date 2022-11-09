@@ -123,7 +123,7 @@ class Configuration:
 
     env: simpy.Environment
     pickers: simpy.Resource
-    # lanes: simpy.Resource
+    buffer_store : simpy.Store    
     consolidation_stations: simpy.Resource
     activating_batches: simpy.Store
     orderline_pick_performance: PickPerformance
@@ -145,7 +145,6 @@ class ManualPickZone:
     def __init__(
             self,
             nr_of_pickers: int,
-            # nr_of_lanes : int,
             max_batch_size: int,
             nr_of_consolidation_stations: int,
             max_waiting_time: int,
@@ -176,26 +175,30 @@ class ManualPickZone:
             env=env,
             pickers=simpy.Resource(env=env, capacity=self.__nr_of_carts),
             buffer_store = simpy.Store(env=env), # make it a FCFS list instead
-            # lanes = simpy.Resource(env=env, capacity = self.__nr_of_lanes),
             consolidation_stations=simpy.Resource(env=env, capacity=self.__nr_of_consolidation_stations),
             activating_batches=simpy.Store(env=env),
             orderline_pick_performance=PickPerformance(mean=18000, st_dev=3000, min_time=6000, max_time=30000),
             consolidation_performance=PickPerformance(mean=6000, st_dev=1000, min_time=3000, max_time=9000),
         )
         self.__configuration.env.process(self.process_activating_batches())
+        self._Tote__configuration = self.__configuration
 
 
-    def forward_tote(self, tote_id : str) -> simpy.Event:
+    def forward_tote(self) -> simpy.Event:
+        print('Forward tote called')
+        
+        while (len(self.__configuration.buffer_store.items()) > 0)  and ( len(self.__accepting_batches) > 0 or nr_busy_lanes < max_lanes ):
+            new_tote = yield self.__configuration.buffer_store.get()
+            self.handle_tote(new_tote.__tote_id, new_tote.__nr_skus)
+            print("Tote id = ", new_tote.__tote_id, ' added to store')
+
         # as long as store not empty and not all batches full:
             # new_tote = yield store.get (wait for tote to appear in store)
             # handle_tote(new_tote)
 
-
         
     def handle_tote(self, tote_id: str, nr_skus: int) -> simpy.Event:
         tote_finish_event = self.__configuration.env.event()
-
-         
 
         if len(self.__accepting_batches) > 0:
             # There are batches accepting totes.
@@ -207,6 +210,7 @@ class ManualPickZone:
                 raise Exception("Cannot add tote " + tote_id + " to accepting batch " + str(oldest_batch.batch_id) + ".")
             return tote_finish_event
         else:
+            print('new batch created')
             # Create new batch if there is still a lane available
             global nr_busy_lanes
             nr_busy_lanes += 1
@@ -216,7 +220,8 @@ class ManualPickZone:
                 zone_configuration=self.__configuration,
                 max_batch_size=self.max_batch_size,
                 max_waiting_time=self.__max_waiting_time,
-                logger=self.__logger
+                logger=self.__logger,
+                manual_pick_zone=manual_pick_zone
             )
 
             self.__logger.log(
@@ -230,20 +235,6 @@ class ManualPickZone:
             self.__configuration.env.process(batch.process())
             self.__next_batch_id += 1
             return tote_finish_event
-
-            # else: # Reroute the tote   
-            #     self.__logger.log(
-            #         action="rerouting tote",
-            #         order_tote_id="tote-" + str(tote_id),
-            #         timestamp=self.__configuration.env.now,
-            #         location_id="outside"
-            #     )
-            #     current_tote = totes_dict[tote_id]
-            #     current_tote.reroute(reroute_constant)
-            #     current_tote.process()
-            #     return tote_finish_event
-
-
 
     
     def process_activating_batches(self):
@@ -264,7 +255,7 @@ class ManualPickZone:
 class Batch:
     """Represents a batch of totes in the manual pick zone."""
     
-    def __init__(self, batch_id: int, zone_configuration: Configuration, max_batch_size: int, max_waiting_time: int, logger: EventLogger):
+    def __init__(self, batch_id: int, zone_configuration: Configuration, max_batch_size: int, max_waiting_time: int, logger: EventLogger, manual_pick_zone : ManualPickZone):
     
         self.batch_id = batch_id
         self.__configuration = zone_configuration
@@ -275,6 +266,7 @@ class Batch:
         self.__batch_full_event = self.__configuration.env.event()
         self.__released = False
         self.__logger = logger
+        self.__manual_pick_zone = manual_pick_zone
         
 
     def accepts_new_tote(self) -> bool:
@@ -367,8 +359,9 @@ class Batch:
             yield self.__configuration.env.timeout(total_pick_time)
             global nr_busy_lanes
             nr_busy_lanes -= 1 # A lane becomes free 
-            # if nr_busy_lanes = max_lanes - 1 and there are elements in the store:
-                # call forward_tote
+            if nr_busy_lanes == max_lanes - 1:     
+                print('forward tote called from busy = max - 1')           
+                self.__manual_pick_zone.forward_tote()
             
 
             self.__logger.log(
@@ -410,7 +403,7 @@ class Tote:
     """Represents a tote
     """
 
-    def __init__(self, tote_id: str, nr_skus: int, arrival_time: int, manual_pick_zone: ManualPickZone, progress_bar: tqdm, env: simpy.Environment, logger: EventLogger):
+    def __init__(self, tote_id: str, nr_skus: int, arrival_time: int, man_pick_zone: ManualPickZone, progress_bar: tqdm, env: simpy.Environment, logger: EventLogger):
         """
 
         Args:
@@ -427,29 +420,26 @@ class Tote:
         self.__tote_id = tote_id
         self.__nr_skus = nr_skus
         self.__arrival_time = arrival_time
-        self.__manual_pick_zone = manual_pick_zone
+        self.__manual_pick_zone = man_pick_zone
         self.__progress_bar = progress_bar
         self.__env = env
         self.__logger = logger
         self.__original_arrival = arrival_time
+        self.__configuration = man_pick_zone.__configuration
 
 
     def process(self, first = True):
-        print('we have process event for tote id , first = ', self.__tote_id, first)
-
-        totes_dict[self.__tote_id] = self
-
-        # Wait until this tote arrives
-        if first:
-            yield self.__env.timeout(self.__arrival_time)
+        yield self.__env.timeout(self.__arrival_time)
 
         # Wait until the manual pick zone has finished handling this tote
         global nr_busy_lanes
         global max_lanes
 
-        # Put it into the store
+        self.__configuration.buffer_store.put(self.__tote_id) # Put it into the store        
 
         if nr_busy_lanes < max_lanes: # or there is a batch still accepting on a lane
+            # print('forward tote called from case tote.process()')
+            self.__manual_pick_zone.forward_tote()
             # forward_tote
             # yield self.__manual_pick_zone.handle_tote(tote_id=self.__tote_id, nr_skus=self.__nr_skus)
             self.__logger.log(
@@ -514,7 +504,7 @@ if __name__ == "__main__":
             tote_id= str(i),
             nr_skus= sample_skus(),
             arrival_time=random.randint(0, 28800000),  # random nr of milisec with at most 8 hours
-            manual_pick_zone=manual_pick_zone,
+            man_pick_zone=manual_pick_zone,
             env=env,
             progress_bar=progress_bar,
             logger=logger
