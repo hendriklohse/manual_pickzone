@@ -175,6 +175,7 @@ class ManualPickZone:
         self.__configuration = Configuration(
             env=env,
             pickers=simpy.Resource(env=env, capacity=self.__nr_of_carts),
+            buffer_store = simpy.Store(env=env), # make it a FCFS list instead
             # lanes = simpy.Resource(env=env, capacity = self.__nr_of_lanes),
             consolidation_stations=simpy.Resource(env=env, capacity=self.__nr_of_consolidation_stations),
             activating_batches=simpy.Store(env=env),
@@ -182,9 +183,19 @@ class ManualPickZone:
             consolidation_performance=PickPerformance(mean=6000, st_dev=1000, min_time=3000, max_time=9000),
         )
         self.__configuration.env.process(self.process_activating_batches())
+
+
+    def forward_tote(self, tote_id : str) -> simpy.Event:
+        # as long as store not empty and not all batches full:
+            # new_tote = yield store.get (wait for tote to appear in store)
+            # handle_tote(new_tote)
+
+
         
     def handle_tote(self, tote_id: str, nr_skus: int) -> simpy.Event:
         tote_finish_event = self.__configuration.env.event()
+
+         
 
         if len(self.__accepting_batches) > 0:
             # There are batches accepting totes.
@@ -356,6 +367,8 @@ class Batch:
             yield self.__configuration.env.timeout(total_pick_time)
             global nr_busy_lanes
             nr_busy_lanes -= 1 # A lane becomes free 
+            # if nr_busy_lanes = max_lanes - 1 and there are elements in the store:
+                # call forward_tote
             
 
             self.__logger.log(
@@ -366,6 +379,7 @@ class Batch:
             )
             # Exit 'with' clause to free up the picker to pick another batch.
 
+        
         # Wait for an available consolidation station.
         with self.__configuration.consolidation_stations.request() as consolidation_station_request:
             yield consolidation_station_request
@@ -433,29 +447,33 @@ class Tote:
         global nr_busy_lanes
         global max_lanes
 
-        if nr_busy_lanes < max_lanes:
-            yield self.__manual_pick_zone.handle_tote(tote_id=self.__tote_id, nr_skus=self.__nr_skus)
+        # Put it into the store
+
+        if nr_busy_lanes < max_lanes: # or there is a batch still accepting on a lane
+            # forward_tote
+            # yield self.__manual_pick_zone.handle_tote(tote_id=self.__tote_id, nr_skus=self.__nr_skus)
             self.__logger.log(
                 action="tote-finished",
                 order_tote_id=self.__tote_id,
                 timestamp=self.__env.now,
                 location_id="consolidation"
             )
-        else:
-            self.__logger.log(
-                action="start-reroute",
-                order_tote_id=self.__tote_id,
-                timestamp=self.__env.now,
-                location_id="outside"
-            )
-            yield self.__env.timeout(self.__arrival_time + reroute_constant)
-            self.__logger.log(
-                action="end-reroute",
-                order_tote_id=self.__tote_id,
-                timestamp=self.__env.now,
-                location_id="outside"
-            )
-            self.process(False)
+        # else:
+        #     # do nothing
+        #     self.__logger.log(
+        #         action="start-reroute",
+        #         order_tote_id=self.__tote_id,
+        #         timestamp=self.__env.now,
+        #         location_id="outside"
+        #     )
+        #     yield self.__env.timeout(self.__arrival_time + reroute_constant)
+        #     self.__logger.log(
+        #         action="end-reroute",
+        #         order_tote_id=self.__tote_id,
+        #         timestamp=self.__env.now,
+        #         location_id="outside"
+        #     )
+        #     self.process(False)
 
         # Log finishing the tote, as this tote may be finished earlier than another tote in the same batch.
 
