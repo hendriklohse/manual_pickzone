@@ -10,10 +10,14 @@ import simpy
 import yaml
 from scipy.stats import truncnorm
 import pandas as pd
+import numpy as np
 
 totes = pd.read_csv("sku_qty_distribution.csv", sep = ";")
 totes_cdf = totes["cumulative_fraction"]
 totes_pdf = totes["fraction"]
+
+nr_totes = 1000
+throughput_times = np.zeros(nr_totes)
 
 class EventLogger:
     """Logs events
@@ -194,6 +198,7 @@ class ManualPickZone:
             self.__accepting_batches[self.__next_batch_id] = batch
             self.__configuration.env.process(batch.process())
             self.__next_batch_id += 1
+
         return tote_finish_event
     
     def process_activating_batches(self):
@@ -225,6 +230,7 @@ class Batch:
         self.__batch_full_event = self.__configuration.env.event()
         self.__released = False
         self.__logger = logger
+        self.tote_set = []
 
     def accepts_new_tote(self) -> bool:
         """Determine if this batch accepts new totes.
@@ -249,6 +255,8 @@ class Batch:
         
         if not self.accepts_new_tote():
             raise Exception("Tote " + tote_id + " is added to batch " + str(self.batch_id) + " while it is not allowed.")
+
+        self.tote_set.append(tote_id)
         self.__tote_to_finish_event[tote_id] = tote_finish_event
         self.__tote_to_nr_skus[tote_id] = nr_skus
         self.__logger.log(
@@ -297,6 +305,9 @@ class Batch:
         # Wait for an available picker.
         with self.__configuration.pickers.request() as picker_request:
             yield picker_request
+            for tote_nr in self.tote_set:
+                throughput_times[int(tote_nr)] = -self.__configuration.env.now            
+            
             self.__logger.log(
                 action="batch-pick-start",
                 order_tote_id="batch-" + str(self.batch_id),
@@ -382,6 +393,8 @@ class Tote:
         # Wait until the manual pick zone has finished handling this tote
         yield self.__manual_pick_zone.handle_tote(tote_id=self.__tote_id, nr_skus=self.__nr_skus)
 
+        throughput_times[int(self.__tote_id)] += self.__env.now
+
         # Log finishing the tote, as this tote may be finished earlier than another tote in the same batch.
         self.__logger.log(
             action="tote-finished",
@@ -418,13 +431,14 @@ if __name__ == "__main__":
     )
 
     # TODO generate totes here, now done with random start times and only 1 sku.
-    nr_totes = 1000
+    
     progress_bar = tqdm(total=nr_totes)
     for i in range(0, nr_totes):
         tote = Tote(
-            tote_id="tote-" + str(i),
+            tote_id= str(i),
             nr_skus=sample_skus(),
-            arrival_time=random.randint(0, 28800000),  # random nr of milisec with at most 8 hours
+            arrival_time = i, # All at the beginning
+            # arrival_time=random.randint(0, 28800000),  # random nr of milisec with at most 8 hours
             manual_pick_zone=manual_pick_zone,
             env=env,
             progress_bar=progress_bar,
