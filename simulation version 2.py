@@ -16,7 +16,7 @@ totes = pd.read_csv("sku_qty_distribution.csv", sep = ";")
 totes_cdf = totes["cumulative_fraction"]
 totes_pdf = totes["fraction"]
 
-nr_totes = 1000
+nr_totes = 10000
 throughput_times = np.zeros(nr_totes)
 
 class EventLogger:
@@ -413,39 +413,73 @@ def sample_skus():
 # ==================================================== Start simulation here ===========================================================================
 
 
-if __name__ == "__main__":
+pickers = [i*3 for i in range(1, 6)]
+cons_stations =[i*3 for i in range(1, 6)]
 
-    random.seed(7858363)  # Use random seed for reproducable results.
+results = np.zeros([5,5])
 
-    # Initialize logger, environment and manual pick zone
-    logger = EventLogger(log_file_name="manual_pick_zone.csv")
-    logger.start_of_day = datetime.datetime.now().replace(hour=6, minute=0, second=0, microsecond=0)  # set start of day to today at 6:00.
-    env = simpy.Environment()
-    manual_pick_zone = ManualPickZone(
-        nr_of_pickers=20,
-        max_batch_size=12,
-        max_waiting_time=600000,  # 600000 milisec = 10 minutes
-        nr_of_consolidation_stations=8,
-        env=env,
-        logger=logger
-    )
+for index_pick in range(5):
+    picker = pickers[index_pick]
+    for index_cons in range(5):
+        cons_station = cons_stations[index_cons]
 
-    # TODO generate totes here, now done with random start times and only 1 sku.
-    
-    progress_bar = tqdm(total=nr_totes)
-    for i in range(0, nr_totes):
-        tote = Tote(
-            tote_id= str(i),
-            nr_skus=sample_skus(),
-            arrival_time = i, # All at the beginning
-            # arrival_time=random.randint(0, 28800000),  # random nr of milisec with at most 8 hours
-            manual_pick_zone=manual_pick_zone,
-            env=env,
-            progress_bar=progress_bar,
-            logger=logger
-        )
-        env.process(tote.process())  # Register the tote process in the simulation environment!
+        if __name__ == "__main__":
 
-    # Run the simulation
-    env.run()
-    progress_bar.close()
+            random.seed(7858363)  # Use random seed for reproducable results.
+
+            # Initialize logger, environment and manual pick zone
+            logger = EventLogger(log_file_name="manual_pick_zone.csv")
+            logger.start_of_day = datetime.datetime.now().replace(hour=6, minute=0, second=0, microsecond=0)  # set start of day to today at 6:00.
+            env = simpy.Environment()
+            manual_pick_zone = ManualPickZone(
+                nr_of_pickers=picker,
+                max_batch_size=12,
+                max_waiting_time=600000,  # 600000 milisec = 10 minutes
+                nr_of_consolidation_stations=cons_station,
+                env=env,
+                logger=logger
+            )
+
+            # TODO generate totes here, now done with random start times and only 1 sku.
+            
+            progress_bar = tqdm(total=nr_totes)
+            for i in range(0, nr_totes):
+                tote = Tote(
+                    tote_id= str(i),
+                    nr_skus=sample_skus(),
+                    arrival_time = i, # All at the beginning
+                    # arrival_time=random.randint(0, 28800000),  # random nr of milisec with at most 8 hours
+                    manual_pick_zone=manual_pick_zone,
+                    env=env,
+                    progress_bar=progress_bar,
+                    logger=logger
+                )
+                env.process(tote.process())  # Register the tote process in the simulation environment!
+
+            # Run the simulation
+            env.run()
+            progress_bar.close()
+
+            results[index_pick][index_cons] = np.mean( throughput_times[1000:]/60000 )
+
+
+print(results)  
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+
+# sns.set()
+print(results)
+yticks = [str(pickers[len(pickers) - i]) for i in range(1, len(pickers) + 1) ]
+ax = sns.heatmap(results, yticklabels=yticks, xticklabels= [str(item) for item in cons_stations])
+plt.show()
+
+
+
+
+# import matplotlib.pyplot as plt
+
+# plt.hist(throughput_times[1000:]/60000, density = True)
+# plt.xlabel('Sojourn time (min)')
+# plt.show()
