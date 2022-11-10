@@ -8,9 +8,10 @@ from typing import List
 from tqdm import tqdm
 import simpy
 import yaml
-from scipy.stats import truncnorm
+from scipy.stats import truncnorm, expon
 import pandas as pd
 import numpy as np
+
 
 totes = pd.read_csv("sku_qty_distribution.csv", sep = ";")
 totes_cdf = totes["cumulative_fraction"]
@@ -305,8 +306,9 @@ class Batch:
         # Wait for an available picker.
         with self.__configuration.pickers.request() as picker_request:
             yield picker_request
-            for tote_nr in self.tote_set:
-                throughput_times[int(tote_nr)] = -self.__configuration.env.now            
+            # for tote_nr in self.tote_set:
+            #     throughput_times[int(tote_nr)] = -self.
+            #     throughput_times[int(tote_nr)] = -self.__configuration.env.now            
             
             self.__logger.log(
                 action="batch-pick-start",
@@ -393,7 +395,13 @@ class Tote:
         # Wait until the manual pick zone has finished handling this tote
         yield self.__manual_pick_zone.handle_tote(tote_id=self.__tote_id, nr_skus=self.__nr_skus)
 
-        throughput_times[int(self.__tote_id)] += self.__env.now
+        throughput_times[int(self.__tote_id)] = self.__env.now - self.__arrival_time
+
+        if (self.__env.now > 60*60*1000) and (self.__env.now <  3*60*60*1000): # measure in the 2nd two hours
+            global finish_totes
+            finish_totes += 1
+            
+
 
         # Log finishing the tote, as this tote may be finished earlier than another tote in the same batch.
         self.__logger.log(
@@ -413,20 +421,31 @@ def sample_skus():
 # ==================================================== Start simulation here ===========================================================================
 
 
-pickers = [i*3 for i in range(1, 6)]
-cons_stations =[i*3 for i in range(1, 6)]
+pickers = [i*5 for i in range(1, 8)]
+cons_stations =[i*1 for i in range(1, 8)]
 
-results = np.zeros([5,5])
+results = np.zeros([7,7])
 
-for index_pick in range(5):
+for index_pick in range(7):
     picker = pickers[index_pick]
-    for index_cons in range(5):
+    for index_cons in range(7):
+        global finish_totes
+        finish_totes = 0
         cons_station = cons_stations[index_cons]
 
         if __name__ == "__main__":
 
             random.seed(7858363)  # Use random seed for reproducable results.
 
+                        # arrival is distributed as 2000 + 1000*expon(1/0.05), + previous.
+            arrival_dist = np.zeros(nr_totes)
+            for i in range(1, nr_totes):
+                if arrival_dist[i] <= 28800000:
+                    arrival_dist[i] = arrival_dist[i-1] + 2000 + 1000*expon.rvs(scale=0.05, size=1)
+                else:
+                    print("ERROR: number of totes do not fit in 8 hours.")
+                    break
+            
             # Initialize logger, environment and manual pick zone
             logger = EventLogger(log_file_name="manual_pick_zone.csv")
             logger.start_of_day = datetime.datetime.now().replace(hour=6, minute=0, second=0, microsecond=0)  # set start of day to today at 6:00.
@@ -435,7 +454,7 @@ for index_pick in range(5):
                 nr_of_pickers=picker,
                 max_batch_size=12,
                 max_waiting_time=600000,  # 600000 milisec = 10 minutes
-                nr_of_consolidation_stations=cons_station,
+                nr_of_consolidation_stations = cons_station,
                 env=env,
                 logger=logger
             )
@@ -447,7 +466,7 @@ for index_pick in range(5):
                 tote = Tote(
                     tote_id= str(i),
                     nr_skus=sample_skus(),
-                    arrival_time = i, # All at the beginning
+                    arrival_time = arrival_dist[i], # All at the beginning
                     # arrival_time=random.randint(0, 28800000),  # random nr of milisec with at most 8 hours
                     manual_pick_zone=manual_pick_zone,
                     env=env,
@@ -460,26 +479,23 @@ for index_pick in range(5):
             env.run()
             progress_bar.close()
 
-            results[index_pick][index_cons] = np.mean( throughput_times[1000:]/60000 )
+            # results[index_pick][index_cons] = np.mean( throughput_times[1000:]/60000 )
+            results[-index_cons - 1][index_pick] = finish_totes/2
 
 
-print(results)  
+print("results = ", results)  
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+N = 7
 
+yticks = [str(i) for i in np.arange(N, 0, -1)]
+xticks = [str(i) for i in np.arange(5, (N+1)*5, 5)]
 
-# sns.set()
 print(results)
-yticks = [str(pickers[len(pickers) - i]) for i in range(1, len(pickers) + 1) ]
-ax = sns.heatmap(results, yticklabels=yticks, xticklabels= [str(item) for item in cons_stations])
+
+ax = sns.heatmap(results, yticklabels=yticks, xticklabels=xticks)
+ax.set_ylabel('Consolidation stations', fontsize=10)
+ax.set_xlabel('Pickers', fontsize=10)
+plt.title('Number of totes finished per hour')
 plt.show()
-
-
-
-
-# import matplotlib.pyplot as plt
-
-# plt.hist(throughput_times[1000:]/60000, density = True)
-# plt.xlabel('Sojourn time (min)')
-# plt.show()
