@@ -8,7 +8,7 @@ from typing import List
 from tqdm import tqdm
 import simpy
 import yaml
-from scipy.stats import truncnorm
+from scipy.stats import truncnorm, expon
 import pandas as pd
 import numpy as np
 
@@ -196,7 +196,7 @@ class ManualPickZone:
             totes_available = (len(self.__configuration.buffer_store.items) > 0)
             has_accepting_batches = (len(self.accepting_batches) > 0)
             has_free_lanes = (nr_busy_lanes < max_lanes)
-            print("Tote id = ", new_tote[0], ' added to store')
+            # print("Tote id = ", new_tote[0], ' added to store')
 
         # as long as store not empty and not all batches full:
         # new_tote = yield store.get (wait for tote to appear in store)
@@ -216,7 +216,7 @@ class ManualPickZone:
                 raise Exception("Cannot add tote " + tote_id + " to accepting batch " + str(oldest_batch.batch_id) + ".")
             return tote_finish_event
         else:
-            print('new batch created')
+            # print('new batch created')
             # Create new batch if there is still a lane available
             global nr_busy_lanes
             nr_busy_lanes += 1
@@ -356,8 +356,8 @@ class Batch:
             global nr_busy_lanes
             nr_busy_lanes -= 1  # A lane becomes free
             if nr_busy_lanes == max_lanes - 1:
-                print('forward tote called from busy = max - 1')
-                self.__manual_pick_zone.forward_tote()
+                # print('forward tote called from busy = max - 1')
+                self.__configuration.env.process(self.__manual_pick_zone.forward_tote())
 
             self.__logger.log(
                 action="batch-pick-end, lane becomes free",
@@ -432,7 +432,7 @@ class Tote:
         self.__configuration.buffer_store.put((self.__tote_id, self.__nr_skus))  # Put it into the store
 
         if nr_busy_lanes < max_lanes:  # or there is a batch still accepting on a lane
-            print('forward tote called from tote process')
+            # print('forward tote called from tote process')
             self.__env.process(self.__manual_pick_zone.forward_tote())
 
             # forward_tote
@@ -488,16 +488,22 @@ if __name__ == "__main__":
         logger=logger
     )
 
-    # TODO generate totes here, now done with random start times and only 1 sku.
-
-    nr_totes = 100
+    nr_totes = 10000
+    # arrival is distributed as 2000 + 1000*expon(1/0.05), + previous.
+    arrival_dist = np.zeros(nr_totes)
     sojourn_times = np.ones(nr_totes)
     progress_bar = tqdm(total=nr_totes)
     for i in range(0, nr_totes):
+        if i < nr_totes - 1:
+            if arrival_dist[i+1] <= 28800000:
+                arrival_dist[i+1] = arrival_dist[i] + 2000 + 1000*expon.rvs(scale=0.05, size=1)
+            else:
+                print("ERROR: number of totes do not fit in 8 hours.")
+                break
         tote = Tote(
             tote_id=str(i),
             nr_skus=sample_skus(),
-            arrival_time=random.randint(0, 28800000),  # random nr of milisec with at most 8 hours
+            arrival_time=arrival_dist[i], # random.randint(1,28800000)
             man_pick_zone=manual_pick_zone,
             env=env,
             progress_bar=progress_bar,
