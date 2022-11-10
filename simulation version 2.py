@@ -5,6 +5,8 @@ import random
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import List
+
+from matplotlib import pyplot as plt
 from tqdm import tqdm
 import simpy
 import yaml
@@ -12,10 +14,9 @@ from scipy.stats import truncnorm, expon
 import pandas as pd
 import numpy as np
 
-max_lanes = 2
-global nr_busy_lanes
-nr_busy_lanes = 0
-reroute_constant = 1000 * 60
+
+nr_totes = 10000
+
 
 totes_dict = dict()
 
@@ -384,6 +385,10 @@ class Batch:
             for (tote_id, consolidation_time) in zip(self.__tote_to_finish_event, consolidation_times):
                 yield self.__configuration.env.timeout(consolidation_time)
                 self.__tote_to_finish_event[tote_id].succeed()
+                if (self.__configuration.env.now > 3600*1000) and (self.__configuration.env.now < 3600*1000*3):
+                    global finish_totes
+                    finish_totes += 1
+
 
             self.__logger.log(
                 action="batch-consolidate-end",
@@ -434,6 +439,10 @@ class Tote:
         if nr_busy_lanes < max_lanes:  # or there is a batch still accepting on a lane
             # print('forward tote called from tote process')
             self.__env.process(self.__manual_pick_zone.forward_tote())
+            # print(self.__env.now)
+            # if (self.__env.now > 3600*1000) and (self.__env.now < 3600*1000*3):
+            #     global finish_totes
+            #     finish_totes += 1
 
             # forward_tote
             # yield self.__manual_pick_zone.handle_tote(tote_id=self.__tote_id, nr_skus=self.__nr_skus)
@@ -471,49 +480,107 @@ class Tote:
 
 # ==================================================== Start simulation here ===========================================================================
 
-if __name__ == "__main__":
+# 8 consolidation stations
+# 4, 8, 12, 16, 20 max lanes
+# 5, 15, 25, 35 pickers
+# 12 batch size
 
-    random.seed(7858363)  # Use random seed for reproducable results.
 
-    # Initialize logger, environment and manual pick zone
-    logger = EventLogger(log_file_name="manual_pick_zone.csv")
-    logger.start_of_day = datetime.datetime.now().replace(hour=6, minute=0, second=0, microsecond=0)  # set start of day to today at 6:00.
-    env = simpy.Environment()
-    manual_pick_zone = ManualPickZone(
-        nr_of_pickers=20,
-        max_batch_size=12,
-        max_waiting_time=600000,  # 600000 milisec = 10 minutes
-        nr_of_consolidation_stations=8,
-        env=env,
-        logger=logger
-    )
+# parameters setting to vary max lanes
+# list_max_lanes = [4, 8, 12, 16, 20]
+# list_pickers = [5, 10, 15, 20, 25, 30, 35, 40]
+# consolidation_stations = 8
+# batch_size = 12
 
-    nr_totes = 10000
-    # arrival is distributed as 2000 + 1000*expon(1/0.05), + previous.
-    arrival_dist = np.zeros(nr_totes)
-    sojourn_times = np.ones(nr_totes)
-    progress_bar = tqdm(total=nr_totes)
-    for i in range(0, nr_totes):
-        if i < nr_totes - 1:
-            if arrival_dist[i+1] <= 28800000:
-                arrival_dist[i+1] = arrival_dist[i] + 2000 + 1000*expon.rvs(scale=0.05, size=1)
-            else:
-                print("ERROR: number of totes do not fit in 8 hours.")
-                break
-        tote = Tote(
-            tote_id=str(i),
-            nr_skus=sample_skus(),
-            arrival_time=arrival_dist[i], # random.randint(1,28800000)
-            man_pick_zone=manual_pick_zone,
-            env=env,
-            progress_bar=progress_bar,
-            logger=logger
-        )
-        env.process(tote.process())  # Register the tote process in the simulation environment!
+# global max_lanes
+# max_lanes = 12
+# list_pickers = [5, 10, 15, 20, 25, 30, 35, 40]
+# consolidation_stations = 8
+# list_batch_size = [4, 8, 12, 16, 20]
 
-    # Run the simulation
-    env.run()
-    progress_bar.close()
+list_max_lanes = [5, 10, 15, 20, 25]
+list_pickers = [5, 10, 15, 20, 25]
+consolidation_stations = 8
+batch_size = 12
+
+results = np.zeros(([len(list_pickers),len(list_max_lanes)]))
+
+for index_pick in range(len(list_pickers)):
+    for index_maxlanes in range(len(list_max_lanes)):
+
+        global max_lanes
+        max_lanes = list_max_lanes[index_maxlanes]
+
+        global nr_busy_lanes
+        nr_busy_lanes = 0
+
+        global finish_totes
+        finish_totes = 0
+
+        if __name__ == "__main__":
+
+            random.seed(7858363)  # Use random seed for reproducable results.
+
+            # Initialize logger, environment and manual pick zone
+            logger = EventLogger(log_file_name="manual_pick_zone.csv")
+            logger.start_of_day = datetime.datetime.now().replace(hour=6, minute=0, second=0, microsecond=0)  # set start of day to today at 6:00.
+            env = simpy.Environment()
+            manual_pick_zone = ManualPickZone(
+                nr_of_pickers=list_pickers[index_pick],
+                max_batch_size=list_max_lanes[index_maxlanes],
+                max_waiting_time=600000,  # 600000 milisec = 10 minutes
+                nr_of_consolidation_stations=consolidation_stations,
+                env=env,
+                logger=logger
+            )
+
+            # arrival is distributed as 2000 + 1000*expon(1/0.05), + previous.
+            arrival_dist = np.zeros(nr_totes)
+            sojourn_times = np.ones(nr_totes)
+            progress_bar = tqdm(total=nr_totes)
+            for i in range(0, nr_totes):
+                if i < nr_totes - 1:
+                    if arrival_dist[i+1] <= 28800000:
+                        arrival_dist[i+1] = arrival_dist[i] + 2000 + 1000*expon.rvs(scale=0.05, size=1)
+                    else:
+                        print("ERROR: number of totes do not fit in 8 hours.")
+                        break
+                tote = Tote(
+                    tote_id=str(i),
+                    nr_skus=sample_skus(),
+                    arrival_time=arrival_dist[i], # random.randint(1,28800000)
+                    man_pick_zone=manual_pick_zone,
+                    env=env,
+                    progress_bar=progress_bar,
+                    logger=logger
+                )
+                env.process(tote.process())  # Register the tote process in the simulation environment!
+
+            # Run the simulation
+            env.run()
+            progress_bar.close()
+            results[index_pick][index_maxlanes] = finish_totes/2
+
+
+# PLOT LINES
+# fig = plt.figure(figsize=(5*1.618, 5*1))
+# ax = fig.add_subplot(1, 1, 1)
+# for index_p in range(len(list_pickers)):
+#     plt.plot(list_batch_size, results[index_p][:], label = str(list_pickers[index_p]) + " pickers", marker="o")
+#
+# ax.set_xlabel("Batch size")
+# ax.set_ylabel("Throughput")
+# ax.set_title("Throughput per hour")
+# ax.legend()
+# ax.grid()
+# # plt.savefig("./Figures/Throughput_lanes_pickers.png")
+# plt.show()
+
+# PLOT HEATMAP
+
+
+
+
 
 # import matplotlib.pyplot as plt
 # plt.hist(sojourn_times/60000)
